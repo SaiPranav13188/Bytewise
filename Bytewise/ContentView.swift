@@ -12,7 +12,9 @@ struct ContentView: View {
     @State private var folder: URL?
     @State private var items: [ScanItem] = []
     @State private var isScanning = false
+    @State private var progress = ScanProgress()
     @State private var showImporter = false
+    @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var scanTask: Task<Void, Never>?
 
@@ -21,6 +23,9 @@ struct ContentView: View {
             HStack {
                 Button("Choose Folder") { showImporter = true }
                     .disabled(isScanning)
+                if isScanning {
+                    Button("Cancel") { scanTask?.cancel() }
+                }
                 if let folder {
                     Text(folder.path)
                         .foregroundStyle(.secondary)
@@ -28,10 +33,22 @@ struct ContentView: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
-                if isScanning {
-                    ProgressView().controlSize(.small)
-                    Text("Scanning…").foregroundStyle(.secondary)
+            }
+
+            if isScanning {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: Double(progress.itemsDone),
+                                 total: Double(max(progress.itemsTotal, 1)))
+                    Text("Scanning \(progress.currentItem) (\(min(progress.itemsDone + 1, progress.itemsTotal)) of \(progress.itemsTotal)) · \(progress.filesScanned.formatted()) files")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
+            }
+
+            if let statusMessage {
+                Text(statusMessage).foregroundStyle(.secondary)
             }
 
             if let errorMessage {
@@ -63,22 +80,37 @@ struct ContentView: View {
         scanTask?.cancel()
         folder = url
         items = []
+        progress = ScanProgress()
+        statusMessage = nil
         errorMessage = nil
         isScanning = true
 
         scanTask = Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                // The app is sandboxed, so the picked folder must be opened
-                // through its security scope before reading it.
-                let accessing = url.startAccessingSecurityScopedResource()
-                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                return Result { try FolderScanner.largestItems(in: url) }
-            }.value
+            // The app is sandboxed, so the picked folder must be opened
+            // through its security scope before reading it.
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
 
-            guard !Task.isCancelled else { return }
-            switch result {
-            case .success(let found): items = found
-            case .failure(let error): errorMessage = error.localizedDescription
+            // Progress arrives from the background scan; keep only the
+            // latest report so the interface never falls behind.
+            let (updates, continuation) = AsyncStream.makeStream(
+                of: ScanProgress.self, bufferingPolicy: .bufferingNewest(1))
+            let progressTask = Task {
+                for await update in updates { progress = update }
+            }
+            defer { progressTask.cancel() }
+
+            let start = Date()
+            do {
+                items = try await FolderScanner.largestItems(in: url) { continuation.yield($0) }
+                continuation.finish()
+                await progressTask.value
+                let seconds = Date().timeIntervalSince(start)
+                statusMessage = "Scanned \(progress.filesScanned.formatted()) files in \(seconds.formatted(.number.precision(.fractionLength(1)))) s"
+            } catch is CancellationError {
+                statusMessage = "Scan cancelled."
+            } catch {
+                errorMessage = error.localizedDescription
             }
             isScanning = false
         }
