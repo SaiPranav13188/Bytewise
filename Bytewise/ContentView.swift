@@ -21,8 +21,16 @@ struct ContentView: View {
     @State private var scanTask: Task<Void, Never>?
     @State private var unreadable: [URL] = []
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
+    @State private var scopeBookmark: Data?
+    @State private var selected: [ObjectIdentifier: FileNode] = [:]
+    @State private var cleanupPlan: [PlannedMove]?
+    @State private var showHoldingArea = false
+    /// The last move, kept so it can be undone and put back on the map.
+    @State private var lastMoved: [(held: HeldItem, node: FileNode, parent: FileNode)] = []
+    @State private var treeVersion = 0
 
     private static let rules = RulesEngine()
+    private static let holdingArea = HoldingArea.standard
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -39,6 +47,7 @@ struct ContentView: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
+                Button("Holding Area…") { showHoldingArea = true }
             }
 
             if isScanning {
@@ -54,7 +63,12 @@ struct ContentView: View {
             }
 
             if let statusMessage {
-                Text(statusMessage).foregroundStyle(.secondary)
+                HStack {
+                    Text(statusMessage).foregroundStyle(.secondary)
+                    if !lastMoved.isEmpty {
+                        Button("Undo", action: undoLastMove)
+                    }
+                }
             }
 
             if let errorMessage {
@@ -70,24 +84,34 @@ struct ContentView: View {
 
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
-                        TreemapView(folder: current, hovered: $hovered) { self.current = $0 }
+                        TreemapView(folder: current, version: treeVersion, hovered: $hovered) { self.current = $0 }
                         TreemapLegend()
                         details(hovered: hovered, in: current)
                     }
 
-                    List(Array(current.children.prefix(20))) { item in
-                        HStack {
-                            Image(systemName: item.isDirectory ? "folder" : "doc")
-                                .foregroundStyle(.secondary)
-                            Text(item.name).lineLimit(1)
-                            VerdictChip(verdict: Self.rules.assess(item.url).verdict)
-                            Spacer()
-                            Text(Self.format(item.size))
-                                .monospacedDigit()
+                    VStack(spacing: 8) {
+                        List(Array(current.children.prefix(20))) { item in
+                            HStack {
+                                Toggle("", isOn: selection(for: item))
+                                    .labelsHidden()
+                                    .toggleStyle(.checkbox)
+                                    .disabled(!Self.canSelect(item))
+                                Image(systemName: item.isDirectory ? "folder" : "doc")
+                                    .foregroundStyle(.secondary)
+                                Text(item.name).lineLimit(1)
+                                VerdictChip(verdict: Self.rules.assess(item.url).verdict)
+                                Spacer()
+                                Text(Self.format(item.size))
+                                    .monospacedDigit()
+                            }
+                            .help(Self.rules.assess(item.url).reason ?? "")
                         }
-                        .help(Self.rules.assess(item.url).reason ?? "")
+                        Button("Review \(selected.count) Selected (\(Self.format(selected.values.reduce(0) { $0 + $1.size })))…") {
+                            cleanupPlan = makePlan()
+                        }
+                        .disabled(selected.isEmpty)
                     }
-                    .frame(width: 300)
+                    .frame(width: 320)
                 }
             } else {
                 Spacer()
@@ -99,12 +123,131 @@ struct ContentView: View {
                                     set: { hasSeenWelcome = !$0 })) {
             WelcomeView { hasSeenWelcome = true }
         }
+        .sheet(isPresented: Binding(get: { cleanupPlan != nil },
+                                    set: { if !$0 { cleanupPlan = nil } })) {
+            CleanupSheet(plan: cleanupPlan ?? [],
+                         onDryRun: makePlan,
+                         onMove: performMove,
+                         onCancel: { cleanupPlan = nil })
+        }
+        .sheet(isPresented: $showHoldingArea) {
+            HoldingAreaView(holdingArea: Self.holdingArea,
+                            onRestored: putBack,
+                            onClose: { showHoldingArea = false })
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             switch result {
             case .success(let url): startScan(url)
             case .failure(let error): errorMessage = error.localizedDescription
             }
         }
+    }
+
+    // MARK: Cleanup
+
+    /// Only items a rule calls safe or worth reviewing can be picked.
+    /// Keep, macOS and unlabelled items never can.
+    private static func canSelect(_ node: FileNode) -> Bool {
+        let verdict = rules.assess(node.url).verdict
+        return verdict == .safeToClear || verdict == .review
+    }
+
+    private func selection(for node: FileNode) -> Binding<Bool> {
+        Binding(get: { selected[ObjectIdentifier(node)] != nil },
+                set: { selected[ObjectIdentifier(node)] = $0 ? node : nil })
+    }
+
+    /// Runs `body` with the scanned folder opened through its security
+    /// scope, which the sandbox needs before Bytewise can check or move
+    /// anything inside it.
+    private func withFolderAccess<T>(_ body: () -> T) -> T {
+        let accessing = folder?.startAccessingSecurityScopedResource() ?? false
+        defer { if accessing { folder?.stopAccessingSecurityScopedResource() } }
+        return body()
+    }
+
+    private func makePlan() -> [PlannedMove] {
+        let apps = RunningApp.current()
+        let candidates = selected.values.sorted { $0.size > $1.size }.map { node in
+            CleanupCandidate(url: node.url, size: node.size,
+                             assessment: Self.rules.assess(node.url),
+                             usedBy: AppUsage.app(using: Self.nameChains(for: node), among: apps))
+        }
+        return withFolderAccess { Self.holdingArea.plan(candidates) }
+    }
+
+    /// Folder names to compare with open apps: the item's path, plus its
+    /// children and grandchildren, since a "Google" cache folder holds
+    /// "Chrome".
+    private static func nameChains(for node: FileNode) -> [[String]] {
+        var chains = [node.url.pathComponents]
+        for child in node.children.prefix(50) {
+            chains.append([node.name, child.name])
+            for grandchild in child.children.prefix(20) {
+                chains.append([child.name, grandchild.name])
+            }
+        }
+        return chains
+    }
+
+    private func performMove(_ plan: [PlannedMove]) {
+        let result = withFolderAccess { Self.holdingArea.move(plan, scopeBookmark: scopeBookmark) }
+        let nodes = Dictionary(selected.values.map { ($0.url.path, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var moved: [(held: HeldItem, node: FileNode, parent: FileNode)] = []
+        for held in result.moved {
+            if let node = nodes[held.originalPath], let parent = node.parent {
+                node.detach()
+                moved.append((held, node, parent))
+            }
+        }
+        if let current, !isInTree(current) { self.current = root }
+
+        lastMoved = moved
+        selected = [:]
+        cleanupPlan = nil
+        hovered = nil
+        treeVersion += 1
+        let size = result.moved.reduce(0) { $0 + $1.size }
+        statusMessage = "Moved \(result.moved.count) \(result.moved.count == 1 ? "item" : "items") (\(Self.format(size))) to the holding area."
+        errorMessage = result.failures.isEmpty ? nil
+            : "Could not move " + result.failures.map { "\($0.url.lastPathComponent): \($0.message)" }.joined(separator: "; ")
+    }
+
+    private func undoLastMove() {
+        var restored: [(item: HeldItem, url: URL)] = []
+        var failures: [String] = []
+        withFolderAccess {
+            for entry in lastMoved {
+                do {
+                    restored.append((entry.held, try Self.holdingArea.restore(entry.held)))
+                } catch {
+                    failures.append("\(entry.held.name): \(error.localizedDescription)")
+                }
+            }
+        }
+        putBack(restored)
+        statusMessage = "Restored \(restored.count) \(restored.count == 1 ? "item" : "items")."
+        errorMessage = failures.isEmpty ? nil : "Could not restore " + failures.joined(separator: "; ")
+    }
+
+    /// Puts restored items back on the map when they came from the last move
+    /// and went back to their original place.
+    private func putBack(_ restored: [(item: HeldItem, url: URL)]) {
+        for (item, url) in restored {
+            guard let index = lastMoved.firstIndex(where: { $0.held.id == item.id }) else { continue }
+            let entry = lastMoved.remove(at: index)
+            if url.path == item.originalPath && isInTree(entry.parent) {
+                entry.node.attach(to: entry.parent)
+            }
+        }
+        treeVersion += 1
+    }
+
+    private func isInTree(_ node: FileNode) -> Bool {
+        var top = node
+        while let parent = top.parent { top = parent }
+        return top === root
     }
 
     /// Shown when macOS blocked some folders, so their sizes are missing.
@@ -193,6 +336,9 @@ struct ContentView: View {
         current = nil
         hovered = nil
         unreadable = []
+        selected = [:]
+        lastMoved = []
+        scopeBookmark = nil
         progress = ScanProgress()
         statusMessage = nil
         errorMessage = nil
@@ -203,6 +349,9 @@ struct ContentView: View {
             // through its security scope before reading it.
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            // Saved with each moved item so it can be restored after a relaunch.
+            scopeBookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                  includingResourceValuesForKeys: nil, relativeTo: nil)
 
             // Progress arrives from the background scan; keep only the
             // latest report so the interface never falls behind.

@@ -25,6 +25,8 @@ extension FileKind {
 /// opens the folder under the pointer.
 struct TreemapView: View {
     let folder: FileNode
+    /// Bump to redraw after the tree changes, e.g. when items are moved away.
+    let version: Int
     @Binding var hovered: FileNode?
     let onOpen: (FileNode) -> Void
 
@@ -33,6 +35,7 @@ struct TreemapView: View {
 
     private struct LayoutKey: Equatable {
         let folder: ObjectIdentifier
+        let version: Int
         let size: CGSize
     }
 
@@ -72,7 +75,7 @@ struct TreemapView: View {
                     onOpen(target)
                 }
             }
-            .onChange(of: LayoutKey(folder: ObjectIdentifier(folder), size: geometry.size),
+            .onChange(of: LayoutKey(folder: ObjectIdentifier(folder), version: version, size: geometry.size),
                       initial: true) {
                 layout = TreemapLayout(folder: folder, size: geometry.size)
                 hovered = nil

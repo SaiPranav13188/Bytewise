@@ -47,8 +47,9 @@ nonisolated enum FileKind: CaseIterable, Sendable {
 /// One file or folder in a scanned tree. Folder sizes include everything
 /// inside them, and children are sorted largest first.
 ///
-/// Nodes are built on the scanner's background task and never changed after
-/// the scan returns, which is why sharing them across threads is safe.
+/// Nodes are built on the scanner's background task. After the scan returns
+/// they are only changed on the main thread (when items are moved to or back
+/// from the holding area), which is why sharing them across threads is safe.
 nonisolated final class FileNode: Identifiable, @unchecked Sendable {
     let url: URL
     let isDirectory: Bool
@@ -69,6 +70,32 @@ nonisolated final class FileNode: Identifiable, @unchecked Sendable {
     func addChild(_ child: FileNode) {
         child.parent = self
         children.append(child)
+    }
+
+    /// Takes this node out of the tree, for when it has been moved away.
+    /// Every folder above it shrinks by its size.
+    func detach() {
+        guard let parent else { return }
+        parent.children.removeAll { $0 === self }
+        parent.adjustSize(by: -size)
+        self.parent = nil
+    }
+
+    /// Puts a detached node back under `parent`, for when it is restored.
+    func attach(to parent: FileNode) {
+        parent.addChild(self)
+        parent.adjustSize(by: size)
+    }
+
+    /// Changes this folder's size and every folder above it, keeping each
+    /// level sorted largest first.
+    private func adjustSize(by delta: Int64) {
+        var node: FileNode? = self
+        while let folder = node {
+            folder.size += delta
+            folder.children.sort { $0.size > $1.size }
+            node = folder.parent
+        }
     }
 
     /// Sets every folder's size to the total of its children and sorts the
