@@ -157,9 +157,13 @@ struct HoldingAreaTests {
         let file = try space.file("Caches/a.txt")
         _ = space.holding.move(space.holding.plan([space.candidate(file)]), scopeBookmark: nil)
 
-        #expect(space.holding.expiredItems().isEmpty)
+        #expect(space.holding.expiredItems(olderThan: 30).isEmpty)
         let later = Date().addingTimeInterval(31 * 24 * 60 * 60)
-        #expect(space.holding.expiredItems(now: later).count == 1)
+        #expect(space.holding.expiredItems(olderThan: 30, now: later).count == 1)
+        // A shorter period from Settings lets items expire sooner.
+        let week = Date().addingTimeInterval(8 * 24 * 60 * 60)
+        #expect(space.holding.expiredItems(olderThan: 7, now: week).count == 1)
+        #expect(space.holding.expiredItems(olderThan: 30, now: week).isEmpty)
     }
 
     @Test func emptyingDeletesOnlyThatItem() throws {

@@ -9,6 +9,7 @@ import SwiftUI
 /// any are skipped. Dry Run checks again and reports without moving.
 struct CleanupSheet: View {
     let plan: [PlannedMove]
+    let retentionDays: Int
     let onDryRun: () -> [PlannedMove]
     let onMove: ([PlannedMove]) -> Void
     let onCancel: () -> Void
@@ -24,7 +25,7 @@ struct CleanupSheet: View {
             Text("Move to Holding Area")
                 .font(.title2)
                 .bold()
-            Text("These items will be moved to Bytewise's holding area, not deleted. You can put any of them back from the Holding Area for \(HoldingArea.retentionDays) days.")
+            Text("These items will be moved to Bytewise's holding area, not deleted. You can put any of them back from the Holding Area. They stay there until you empty them, which you can do after \(retentionDays) days.")
                 .fixedSize(horizontal: false, vertical: true)
 
             List(current) { entry in

@@ -58,7 +58,8 @@ nonisolated enum HoldingAreaError: LocalizedError {
 /// are deleted for good. Nothing is ever deleted directly: items are moved
 /// here, every move is logged, and any item can be put back.
 nonisolated struct HoldingArea: Sendable {
-    static let retentionDays = 30
+    /// Days before an item can be emptied, unless changed in Settings.
+    static let defaultRetentionDays = 30
 
     let directory: URL
 
@@ -79,9 +80,9 @@ nonisolated struct HoldingArea: Sendable {
             .sorted { $0.movedAt > $1.movedAt }
     }
 
-    /// Items held longer than the retention period.
-    func expiredItems(now: Date = Date()) -> [HeldItem] {
-        let cutoff = now.addingTimeInterval(-Double(Self.retentionDays) * 24 * 60 * 60)
+    /// Items held for more than `days` days, which may now be emptied.
+    func expiredItems(olderThan days: Int, now: Date = Date()) -> [HeldItem] {
+        let cutoff = now.addingTimeInterval(-Double(days) * 24 * 60 * 60)
         return items().filter { $0.movedAt < cutoff }
     }
 
@@ -145,7 +146,7 @@ nonisolated struct HoldingArea: Sendable {
                 moved.append(held)
             } catch {
                 try? FileManager.default.removeItem(at: slot)
-                failures.append(MoveFailure(url: source, message: error.localizedDescription))
+                failures.append(MoveFailure(url: source, message: FriendlyError.message(for: error)))
             }
         }
         return (moved, failures)

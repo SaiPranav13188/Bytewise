@@ -9,6 +9,7 @@ import SwiftUI
 /// retention period can be emptied for good, after a confirmation.
 struct HoldingAreaView: View {
     let holdingArea: HoldingArea
+    let retentionDays: Int
     let onRestored: ([(item: HeldItem, url: URL)]) -> Void
     let onClose: () -> Void
 
@@ -22,7 +23,7 @@ struct HoldingAreaView: View {
             Text("Holding Area")
                 .font(.title2)
                 .bold()
-            Text("Items you cleaned up wait here for \(HoldingArea.retentionDays) days before they can be emptied. Restore puts an item back where it was.")
+            Text("Items you cleaned up wait here for \(retentionDays) days before they can be emptied. Restore puts an item back where it was. You can change the number of days in Settings.")
                 .fixedSize(horizontal: false, vertical: true)
 
             if items.isEmpty {
@@ -76,20 +77,20 @@ struct HoldingAreaView: View {
         ) {
             Button("Delete Permanently", role: .destructive, action: emptyExpired)
         } message: {
-            Text("These items have been in the holding area for more than \(HoldingArea.retentionDays) days. This cannot be undone.")
+            Text("These items have been in the holding area for more than \(retentionDays) days. This cannot be undone.")
         }
     }
 
     private func heldText(for item: HeldItem) -> String {
         let days = Calendar.current.dateComponents([.day], from: item.movedAt, to: Date()).day ?? 0
         let moved = days == 0 ? "Moved today" : "Moved \(days) \(days == 1 ? "day" : "days") ago"
-        let left = HoldingArea.retentionDays - days
+        let left = retentionDays - days
         return left > 0 ? "\(moved) · can be emptied in \(left) \(left == 1 ? "day" : "days")" : "\(moved) · ready to empty"
     }
 
     private func reload() {
         items = holdingArea.items()
-        expired = holdingArea.expiredItems()
+        expired = holdingArea.expiredItems(olderThan: retentionDays)
     }
 
     private func restore(_ toRestore: [HeldItem]) {
@@ -99,7 +100,7 @@ struct HoldingAreaView: View {
             do {
                 restored.append((item, try holdingArea.restore(item)))
             } catch {
-                failures.append("\(item.name): \(error.localizedDescription)")
+                failures.append("\(item.name): \(FriendlyError.message(for: error))")
             }
         }
         reload()

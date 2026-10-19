@@ -13,5 +13,8 @@ struct BytewiseApp: App {
         WindowGroup {
             ContentView()
         }
+        Settings {
+            SettingsView()
+        }
     }
 }

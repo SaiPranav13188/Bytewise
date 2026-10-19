@@ -20,7 +20,8 @@ struct ContentView: View {
     @State private var errorMessage: String?
     @State private var scanTask: Task<Void, Never>?
     @State private var unreadable: [URL] = []
-    @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
+    @AppStorage(AppSettings.hasSeenWelcomeKey) private var hasSeenWelcome = false
+    @AppStorage(AppSettings.holdingDaysKey) private var holdingDays = HoldingArea.defaultRetentionDays
     @State private var scopeBookmark: Data?
     @State private var selected: [ObjectIdentifier: FileNode] = [:]
     @State private var cleanupPlan: [PlannedMove]?
@@ -28,6 +29,10 @@ struct ContentView: View {
     /// The last move, kept so it can be undone and put back on the map.
     @State private var lastMoved: [(held: HeldItem, node: FileNode, parent: FileNode)] = []
     @State private var treeVersion = 0
+    @State private var mode = Mode.map
+    @State private var aiModels: [AIModel] = []
+
+    private enum Mode { case map, models }
 
     private static let rules = RulesEngine()
     private static let holdingArea = HoldingArea.standard
@@ -79,7 +84,24 @@ struct ContentView: View {
                 accessNotice
             }
 
-            if let current {
+            if current != nil {
+                Picker("View", selection: $mode) {
+                    Text("Map").tag(Mode.map)
+                    Text("AI Models (\(aiModels.count))").tag(Mode.models)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+
+            if mode == .models {
+                AIModelsView(models: aiModels, rules: Self.rules) { node in
+                    // Open the folder that holds the model, so it shows in
+                    // the list and can be picked for cleanup.
+                    self.current = node.parent ?? node
+                    mode = .map
+                }
+            } else if let current {
                 breadcrumb(for: current)
 
                 HStack(alignment: .top, spacing: 12) {
@@ -126,19 +148,21 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { cleanupPlan != nil },
                                     set: { if !$0 { cleanupPlan = nil } })) {
             CleanupSheet(plan: cleanupPlan ?? [],
+                         retentionDays: holdingDays,
                          onDryRun: makePlan,
                          onMove: performMove,
                          onCancel: { cleanupPlan = nil })
         }
         .sheet(isPresented: $showHoldingArea) {
             HoldingAreaView(holdingArea: Self.holdingArea,
+                            retentionDays: holdingDays,
                             onRestored: putBack,
                             onClose: { showHoldingArea = false })
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             switch result {
             case .success(let url): startScan(url)
-            case .failure(let error): errorMessage = error.localizedDescription
+            case .failure(let error): errorMessage = FriendlyError.message(for: error)
             }
         }
     }
@@ -204,6 +228,7 @@ struct ContentView: View {
         if let current, !isInTree(current) { self.current = root }
 
         lastMoved = moved
+        aiModels = root.map { AIModelFinder.find(in: $0) } ?? []
         selected = [:]
         cleanupPlan = nil
         hovered = nil
@@ -211,7 +236,7 @@ struct ContentView: View {
         let size = result.moved.reduce(0) { $0 + $1.size }
         statusMessage = "Moved \(result.moved.count) \(result.moved.count == 1 ? "item" : "items") (\(Self.format(size))) to the holding area."
         errorMessage = result.failures.isEmpty ? nil
-            : "Could not move " + result.failures.map { "\($0.url.lastPathComponent): \($0.message)" }.joined(separator: "; ")
+            : "Could not move " + result.failures.map { "\($0.url.lastPathComponent): \($0.message)" }.joined(separator: " ")
     }
 
     private func undoLastMove() {
@@ -222,7 +247,7 @@ struct ContentView: View {
                 do {
                     restored.append((entry.held, try Self.holdingArea.restore(entry.held)))
                 } catch {
-                    failures.append("\(entry.held.name): \(error.localizedDescription)")
+                    failures.append("\(entry.held.name): \(FriendlyError.message(for: error))")
                 }
             }
         }
@@ -241,6 +266,7 @@ struct ContentView: View {
                 entry.node.attach(to: entry.parent)
             }
         }
+        aiModels = root.map { AIModelFinder.find(in: $0) } ?? []
         treeVersion += 1
     }
 
@@ -339,6 +365,8 @@ struct ContentView: View {
         selected = [:]
         lastMoved = []
         scopeBookmark = nil
+        aiModels = []
+        mode = .map
         progress = ScanProgress()
         statusMessage = nil
         errorMessage = nil
@@ -364,18 +392,24 @@ struct ContentView: View {
 
             let start = Date()
             do {
-                let result = try await FolderScanner.scan(url) { continuation.yield($0) }
+                let result = try await FolderScanner.scan(url, excluding: AppSettings.excludedFolders) {
+                    continuation.yield($0)
+                }
                 continuation.finish()
                 await progressTask.value
                 root = result.root
                 current = result.root
                 unreadable = result.unreadable
+                aiModels = AIModelFinder.find(in: result.root)
+                if result.root.children.isEmpty && result.unreadable.contains(where: { $0.path == url.path }) {
+                    errorMessage = "Bytewise could not open this folder. macOS may be protecting it. Turn on Full Disk Access for Bytewise, then scan again."
+                }
                 let seconds = Date().timeIntervalSince(start)
                 statusMessage = "Scanned \(progress.filesScanned.formatted()) files in \(seconds.formatted(.number.precision(.fractionLength(1)))) s"
             } catch is CancellationError {
                 statusMessage = "Scan cancelled."
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = FriendlyError.message(for: error)
             }
             isScanning = false
         }

@@ -55,16 +55,21 @@ nonisolated final class FileNode: Identifiable, @unchecked Sendable {
     let isDirectory: Bool
     let kind: FileKind
     private(set) var size: Int64
+    /// When the item was last opened or changed, whichever is later. For
+    /// folders, the latest of everything inside. Approximate: macOS does
+    /// not always record when a file was opened.
+    private(set) var lastUsed: Date?
     private(set) var children: [FileNode] = []
     private(set) weak var parent: FileNode?
 
     var name: String { url.lastPathComponent }
 
-    init(url: URL, isDirectory: Bool, kind: FileKind, size: Int64 = 0) {
+    init(url: URL, isDirectory: Bool, kind: FileKind, size: Int64 = 0, lastUsed: Date? = nil) {
         self.url = url
         self.isDirectory = isDirectory
         self.kind = kind
         self.size = size
+        self.lastUsed = lastUsed
     }
 
     func addChild(_ child: FileNode) {
@@ -98,12 +103,14 @@ nonisolated final class FileNode: Identifiable, @unchecked Sendable {
         }
     }
 
-    /// Sets every folder's size to the total of its children and sorts the
-    /// children largest first. Call once, after the whole tree is built.
+    /// Sets every folder's size to the total of its children and its last
+    /// used date to the latest of theirs, and sorts the children largest
+    /// first. Call once, after the whole tree is built.
     @discardableResult
     func rollUpSizes() -> Int64 {
         if isDirectory {
             size = children.reduce(0) { $0 + $1.rollUpSizes() }
+            lastUsed = children.compactMap(\.lastUsed).max()
             children.sort { $0.size > $1.size }
         }
         return size

@@ -31,24 +31,28 @@ private nonisolated final class ErrorLog {
 /// twice through a link.
 nonisolated enum FolderScanner {
     private static let keys: [URLResourceKey] = [
-        .isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey
+        .isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey,
+        .contentModificationDateKey, .contentAccessDateKey
     ]
 
     /// How many files to visit between progress reports.
     private static let progressInterval = 500
 
-    /// Returns the tree rooted at `root`. Runs in the background and stops
-    /// with `CancellationError` when the calling task is cancelled.
+    /// Returns the tree rooted at `root`, leaving out the folders in
+    /// `excluding` and everything inside them. Runs in the background and
+    /// stops with `CancellationError` when the calling task is cancelled.
     @concurrent
     static func scan(
         _ root: URL,
+        excluding excluded: Set<String> = [],
         progress: @escaping @Sendable (ScanProgress) -> Void = { _ in }
     ) async throws -> ScanResult {
-        try buildTree(root, progress: progress)
+        try buildTree(root, excluding: excluded, progress: progress)
     }
 
     private static func buildTree(
         _ root: URL,
+        excluding excluded: Set<String>,
         progress: (ScanProgress) -> Void
     ) throws -> ScanResult {
         let rootNode = FileNode(url: root, isDirectory: true, kind: .folder)
@@ -90,6 +94,10 @@ nonisolated enum FolderScanner {
                 continue
             }
             if values.isSymbolicLink == true { continue }
+            if excluded.contains(url.path) {
+                enumerator.skipDescendants()
+                continue
+            }
 
             let parent = stack[stack.count - 1]
             if values.isDirectory == true {
@@ -103,8 +111,10 @@ nonisolated enum FolderScanner {
                     kinds[ext] = kind
                     return kind
                 }()
+                let lastUsed = [values.contentAccessDate, values.contentModificationDate].compactMap { $0 }.max()
                 parent.addChild(FileNode(url: url, isDirectory: false, kind: kind,
-                                         size: Int64(values.totalFileAllocatedSize ?? 0)))
+                                         size: Int64(values.totalFileAllocatedSize ?? 0),
+                                         lastUsed: lastUsed))
                 state.filesScanned += 1
                 if state.filesScanned % progressInterval == 0 {
                     try Task.checkCancellation()

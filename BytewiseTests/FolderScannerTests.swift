@@ -110,6 +110,30 @@ struct FolderScannerTests {
         #expect(c.parent?.parent?.parent === root)
     }
 
+    @Test func excludedFoldersAreLeftOut() async throws {
+        let folder = try TestFolder()
+        try folder.file("keep/a.bin", bytes: 50_000)
+        let skipped = try folder.file("skip/inner/b.bin", bytes: 500_000).deletingLastPathComponent().deletingLastPathComponent()
+
+        let result = try await FolderScanner.scan(folder.url, excluding: [skipped.path])
+        #expect(result.root.children.map(\.name) == ["keep"])
+        #expect(result.root.size == result.root.children[0].size)
+    }
+
+    @Test func foldersTakeTheLatestDateOfTheirContents() async throws {
+        let folder = try TestFolder()
+        let old = try folder.file("box/old.txt", bytes: 10)
+        let new = try folder.file("box/new.txt", bytes: 10)
+        let oldDate = Date(timeIntervalSince1970: 1_600_000_000)
+        let newDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: old.path)
+        try FileManager.default.setAttributes([.modificationDate: newDate], ofItemAtPath: new.path)
+
+        let box = try #require(try await FolderScanner.scan(folder.url).root.children.first)
+        // Opening a file can move its date later still, so only a lower bound is certain.
+        #expect(try #require(box.lastUsed) >= newDate)
+    }
+
     @Test func fileKindsComeFromExtensions() {
         #expect(FileKind(fileExtension: "mov") == .video)
         #expect(FileKind(fileExtension: "mp3") == .audio)

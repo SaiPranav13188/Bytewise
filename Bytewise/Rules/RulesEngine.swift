@@ -150,6 +150,15 @@ nonisolated struct RulesEngine: Sendable {
         Rule(pattern: .inside("~/Library/Caches"), verdict: .safeToClear, reason: "App cache. The app rebuilds it. Clear it while the app is closed."),
         Rule(pattern: .at("~/Library/Caches"), verdict: .review, reason: "Caches for all your apps. Open it to see each one."),
 
+        // AI models. Above app data, so they get their own reasons.
+        Rule(pattern: .atOrInside("~/.ollama"), verdict: .review, reason: "Ollama's AI models. Remove them with ollama rm so Ollama stays consistent."),
+        Rule(pattern: .atOrInside("~/.cache/huggingface"), verdict: .review, reason: "Hugging Face downloads. Fetched again the next time a project needs them."),
+        Rule(pattern: .atOrInside("~/.lmstudio/models"), verdict: .review, reason: "LM Studio models. Can be downloaded again from LM Studio."),
+        Rule(pattern: .atOrInside("~/.cache/lm-studio"), verdict: .review, reason: "LM Studio models. Can be downloaded again from LM Studio."),
+        Rule(pattern: .atOrInside("~/Library/Application Support/nomic.ai/GPT4All"), verdict: .review, reason: "GPT4All models and chats. Models can be downloaded again."),
+        Rule(pattern: .atOrInside("~/.cache/torch"), verdict: .review, reason: "PyTorch downloads. Fetched again the next time a project loads them."),
+        Rule(pattern: .folderNamed("OptGuideOnDeviceModel"), verdict: .review, reason: "Chrome's on-device AI model. Chrome downloads it again while its AI features are on."),
+
         // App data and logs.
         Rule(pattern: .atOrInside("~/Library/Application Support"), verdict: .review, reason: "App data. Some apps keep important files here."),
         Rule(pattern: .atOrInside("~/Library/Logs"), verdict: .review, reason: "Log files. Usually safe to remove, but useful for troubleshooting."),
