@@ -6,3 +6,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Private planning notes
+CLAUDE.md

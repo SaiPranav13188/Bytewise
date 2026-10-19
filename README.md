@@ -92,3 +92,7 @@ Measured on the author's Mac:
 - The open-app check compares folder names with app names and bundle IDs. It catches common cases, such as Chrome and Brave caches, but not every one.
 - Items on other disks can't be moved to the holding area yet.
 - "Last used" dates are approximate, because macOS does not always record when a file was opened.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
