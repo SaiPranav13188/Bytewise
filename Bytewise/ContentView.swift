@@ -10,7 +10,9 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var folder: URL?
-    @State private var items: [ScanItem] = []
+    @State private var root: FileNode?
+    @State private var current: FileNode?
+    @State private var hovered: FileNode?
     @State private var isScanning = false
     @State private var progress = ScanProgress()
     @State private var showImporter = false
@@ -55,19 +57,37 @@ struct ContentView: View {
                 Text(errorMessage).foregroundStyle(.red)
             }
 
-            List(items) { item in
-                HStack {
-                    Image(systemName: item.isDirectory ? "folder" : "doc")
-                        .foregroundStyle(.secondary)
-                    Text(item.name).lineLimit(1)
-                    Spacer()
-                    Text(ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
-                        .monospacedDigit()
+            if let current {
+                breadcrumb(for: current)
+
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TreemapView(folder: current, hovered: $hovered) { self.current = $0 }
+                        TreemapLegend()
+                        Text(details(hovered: hovered, in: current))
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    List(Array(current.children.prefix(20))) { item in
+                        HStack {
+                            Image(systemName: item.isDirectory ? "folder" : "doc")
+                                .foregroundStyle(.secondary)
+                            Text(item.name).lineLimit(1)
+                            Spacer()
+                            Text(Self.format(item.size))
+                                .monospacedDigit()
+                        }
+                    }
+                    .frame(width: 300)
                 }
+            } else {
+                Spacer()
             }
         }
         .padding()
-        .frame(minWidth: 500, minHeight: 400)
+        .frame(minWidth: 900, minHeight: 550)
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             switch result {
             case .success(let url): startScan(url)
@@ -76,10 +96,50 @@ struct ContentView: View {
         }
     }
 
+    /// The path from the scanned folder down to the open one. Click a part to
+    /// go back up to it.
+    private func breadcrumb(for node: FileNode) -> some View {
+        var chain: [FileNode] = []
+        var next: FileNode? = node
+        while let step = next {
+            chain.insert(step, at: 0)
+            next = step.parent
+        }
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(chain) { step in
+                    if step !== chain.first {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button(step.name) { current = step }
+                        .buttonStyle(.link)
+                        .disabled(step === node)
+                }
+            }
+        }
+    }
+
+    private func details(hovered: FileNode?, in folder: FileNode) -> String {
+        guard let hovered else {
+            return "\(folder.name) · \(Self.format(folder.size)) · \(folder.children.count.formatted()) items"
+        }
+        let relativePath = hovered.url.path.replacingOccurrences(of: folder.url.path + "/", with: "")
+        let share = folder.size > 0 ? Double(hovered.size) / Double(folder.size) : 0
+        return "\(relativePath) · \(Self.format(hovered.size)) · \(share.formatted(.percent.precision(.fractionLength(1)))) of \(folder.name)"
+    }
+
+    private static func format(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
     private func startScan(_ url: URL) {
         scanTask?.cancel()
         folder = url
-        items = []
+        root = nil
+        current = nil
+        hovered = nil
         progress = ScanProgress()
         statusMessage = nil
         errorMessage = nil
@@ -102,9 +162,11 @@ struct ContentView: View {
 
             let start = Date()
             do {
-                items = try await FolderScanner.largestItems(in: url) { continuation.yield($0) }
+                let tree = try await FolderScanner.scan(url) { continuation.yield($0) }
                 continuation.finish()
                 await progressTask.value
+                root = tree
+                current = tree
                 let seconds = Date().timeIntervalSince(start)
                 statusMessage = "Scanned \(progress.filesScanned.formatted()) files in \(seconds.formatted(.number.precision(.fractionLength(1)))) s"
             } catch is CancellationError {

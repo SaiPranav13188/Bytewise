@@ -5,17 +5,8 @@
 
 import Foundation
 
-/// One direct child of the scanned folder, with its total allocated size.
-nonisolated struct ScanItem: Identifiable, Sendable {
-    let id = UUID()
-    let url: URL
-    let name: String
-    let isDirectory: Bool
-    let size: Int64
-}
-
 /// How far a scan has got. `itemsDone` and `itemsTotal` count the direct
-/// children of the scanned folder; `filesScanned` counts everything visited.
+/// children of the scanned folder; `filesScanned` counts every file visited.
 nonisolated struct ScanProgress: Sendable {
     var itemsDone = 0
     var itemsTotal = 0
@@ -23,8 +14,9 @@ nonisolated struct ScanProgress: Sendable {
     var filesScanned = 0
 }
 
-/// Scans a folder off the main thread. Sizes use allocated bytes and
-/// symbolic links are not followed, so nothing is counted twice through a link.
+/// Scans a folder off the main thread and builds its full tree. Sizes use
+/// allocated bytes and symbolic links are not followed, so nothing is counted
+/// twice through a link.
 nonisolated enum FolderScanner {
     private static let keys: [URLResourceKey] = [
         .isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey
@@ -33,82 +25,81 @@ nonisolated enum FolderScanner {
     /// How many files to visit between progress reports.
     private static let progressInterval = 500
 
-    /// Returns the `limit` largest direct children of `root`, folders sized
-    /// by everything inside them. Runs in the background and stops with
-    /// `CancellationError` when the calling task is cancelled.
+    /// Returns the tree rooted at `root`. Runs in the background and stops
+    /// with `CancellationError` when the calling task is cancelled.
     @concurrent
-    static func largestItems(
-        in root: URL,
-        limit: Int = 20,
-        progress: @escaping @Sendable (ScanProgress) -> Void = { _ in }
-    ) async throws -> [ScanItem] {
-        try scan(root, limit: limit, progress: progress)
-    }
-
-    private static func scan(
+    static func scan(
         _ root: URL,
-        limit: Int,
-        progress: (ScanProgress) -> Void
-    ) throws -> [ScanItem] {
-        let children = (try? FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: keys,
-            options: []
-        )) ?? []
-
-        var state = ScanProgress(itemsTotal: children.count)
-        var items: [ScanItem] = []
-        for child in children {
-            try Task.checkCancellation()
-            state.currentItem = child.lastPathComponent
-            progress(state)
-
-            if let values = try? child.resourceValues(forKeys: Set(keys)),
-               values.isSymbolicLink != true {
-                let isDirectory = values.isDirectory ?? false
-                let size: Int64
-                if isDirectory {
-                    size = try folderSize(child, state: &state, progress: progress)
-                } else {
-                    size = Int64(values.totalFileAllocatedSize ?? 0)
-                    state.filesScanned += 1
-                }
-                items.append(ScanItem(url: child, name: child.lastPathComponent,
-                                      isDirectory: isDirectory, size: size))
-            }
-            state.itemsDone += 1
-        }
-        progress(state)
-
-        return Array(items.sorted { $0.size > $1.size }.prefix(limit))
+        progress: @escaping @Sendable (ScanProgress) -> Void = { _ in }
+    ) async throws -> FileNode {
+        try buildTree(root, progress: progress)
     }
 
-    /// Sums allocated sizes of every file under `folder`. Unreadable
-    /// subfolders are skipped instead of failing the scan.
-    private static func folderSize(
-        _ folder: URL,
-        state: inout ScanProgress,
+    private static func buildTree(
+        _ root: URL,
         progress: (ScanProgress) -> Void
-    ) throws -> Int64 {
+    ) throws -> FileNode {
+        let rootNode = FileNode(url: root, isDirectory: true, kind: .folder)
+        var state = ScanProgress(
+            itemsTotal: (try? FileManager.default.contentsOfDirectory(atPath: root.path).count) ?? 0)
+
+        // Unreadable subfolders are skipped instead of failing the scan.
         guard let enumerator = FileManager.default.enumerator(
-            at: folder,
+            at: root,
             includingPropertiesForKeys: keys,
             options: [],
             errorHandler: { _, _ in true }
-        ) else { return 0 }
+        ) else { return rootNode }
 
-        var total: Int64 = 0
+        let keySet = Set(keys)
+        var kinds: [String: FileKind] = [:]
+        // stack[n] is the folder at depth n on the current path; the
+        // enumerator visits each folder before its contents.
+        var stack = [rootNode]
+        var topLevelSeen = 0
+
         for case let url as URL in enumerator {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)),
-                  values.isSymbolicLink != true,
-                  values.isDirectory != true else { continue }
-            total += Int64(values.totalFileAllocatedSize ?? 0)
-            state.filesScanned += 1
-            if state.filesScanned % progressInterval == 0 {
+            let level = enumerator.level
+            if level == 1 {
                 try Task.checkCancellation()
+                state.itemsDone = topLevelSeen
+                state.currentItem = url.lastPathComponent
+                topLevelSeen += 1
                 progress(state)
             }
+            if stack.count > level { stack.removeLast(stack.count - level) }
+            guard stack.count == level,
+                  let values = try? url.resourceValues(forKeys: keySet) else {
+                enumerator.skipDescendants()
+                continue
+            }
+            if values.isSymbolicLink == true { continue }
+
+            let parent = stack[stack.count - 1]
+            if values.isDirectory == true {
+                let node = FileNode(url: url, isDirectory: true, kind: .folder)
+                parent.addChild(node)
+                stack.append(node)
+            } else {
+                let ext = url.pathExtension.lowercased()
+                let kind = kinds[ext] ?? {
+                    let kind = FileKind(fileExtension: ext)
+                    kinds[ext] = kind
+                    return kind
+                }()
+                parent.addChild(FileNode(url: url, isDirectory: false, kind: kind,
+                                         size: Int64(values.totalFileAllocatedSize ?? 0)))
+                state.filesScanned += 1
+                if state.filesScanned % progressInterval == 0 {
+                    try Task.checkCancellation()
+                    progress(state)
+                }
+            }
         }
-        return total
+
+        state.itemsDone = state.itemsTotal
+        progress(state)
+        rootNode.rollUpSizes()
+        return rootNode
     }
 }
