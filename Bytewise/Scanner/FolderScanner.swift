@@ -14,6 +14,18 @@ nonisolated struct ScanProgress: Sendable {
     var filesScanned = 0
 }
 
+nonisolated struct ScanResult: Sendable {
+    let root: FileNode
+    /// Folders macOS would not let the scan read, usually because Full Disk
+    /// Access has not been granted. Their sizes are missing from the totals.
+    let unreadable: [URL]
+}
+
+/// Collects read errors from the enumerator's error handler.
+private nonisolated final class ErrorLog {
+    var urls: [URL] = []
+}
+
 /// Scans a folder off the main thread and builds its full tree. Sizes use
 /// allocated bytes and symbolic links are not followed, so nothing is counted
 /// twice through a link.
@@ -31,25 +43,29 @@ nonisolated enum FolderScanner {
     static func scan(
         _ root: URL,
         progress: @escaping @Sendable (ScanProgress) -> Void = { _ in }
-    ) async throws -> FileNode {
+    ) async throws -> ScanResult {
         try buildTree(root, progress: progress)
     }
 
     private static func buildTree(
         _ root: URL,
         progress: (ScanProgress) -> Void
-    ) throws -> FileNode {
+    ) throws -> ScanResult {
         let rootNode = FileNode(url: root, isDirectory: true, kind: .folder)
         var state = ScanProgress(
             itemsTotal: (try? FileManager.default.contentsOfDirectory(atPath: root.path).count) ?? 0)
 
-        // Unreadable subfolders are skipped instead of failing the scan.
+        // Unreadable subfolders are recorded and skipped instead of failing the scan.
+        let errors = ErrorLog()
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: keys,
             options: [],
-            errorHandler: { _, _ in true }
-        ) else { return rootNode }
+            errorHandler: { url, _ in
+                errors.urls.append(url)
+                return true
+            }
+        ) else { return ScanResult(root: rootNode, unreadable: [root]) }
 
         let keySet = Set(keys)
         var kinds: [String: FileKind] = [:]
@@ -100,6 +116,6 @@ nonisolated enum FolderScanner {
         state.itemsDone = state.itemsTotal
         progress(state)
         rootNode.rollUpSizes()
-        return rootNode
+        return ScanResult(root: rootNode, unreadable: errors.urls)
     }
 }

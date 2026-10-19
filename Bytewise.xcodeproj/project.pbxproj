@@ -6,11 +6,27 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		B7E50000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F2A2696E30863216002D0C1B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F2A2697530863216002D0C1B;
+			remoteInfo = Bytewise;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		B7E500000000000000000002 /* BytewiseTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BytewiseTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F2A2697630863216002D0C1B /* Bytewise.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bytewise.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		B7E500000000000000000003 /* BytewiseTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BytewiseTests;
+			sourceTree = "<group>";
+		};
 		F2A2697830863216002D0C1B /* Bytewise */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Bytewise;
@@ -19,6 +35,11 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		B7E500000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
 		F2A2697330863216002D0C1B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -31,6 +52,7 @@
 			isa = PBXGroup;
 			children = (
 				F2A2697830863216002D0C1B /* Bytewise */,
+				B7E500000000000000000003 /* BytewiseTests */,
 				F2A2697730863216002D0C1B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -39,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				F2A2697630863216002D0C1B /* Bytewise.app */,
+				B7E500000000000000000002 /* BytewiseTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -46,6 +69,27 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		B7E500000000000000000001 /* BytewiseTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B7E500000000000000000007 /* Build configuration list for PBXNativeTarget "BytewiseTests" */;
+			buildPhases = (
+				B7E500000000000000000004 /* Sources */,
+				B7E500000000000000000005 /* Frameworks */,
+				B7E500000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B7E50000000000000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B7E500000000000000000003 /* BytewiseTests */,
+			);
+			name = BytewiseTests;
+			productName = BytewiseTests;
+			productReference = B7E500000000000000000002 /* BytewiseTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		F2A2697530863216002D0C1B /* Bytewise */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F2A2698130863217002D0C1B /* Build configuration list for PBXNativeTarget "Bytewise" */;
@@ -74,6 +118,10 @@
 				LastSwiftUpdateCheck = 2710;
 				LastUpgradeCheck = 2710;
 				TargetAttributes = {
+					B7E500000000000000000001 = {
+						CreatedOnToolsVersion = 27.1;
+						TestTargetID = F2A2697530863216002D0C1B;
+					};
 					F2A2697530863216002D0C1B = {
 						CreatedOnToolsVersion = 27.1;
 					};
@@ -94,11 +142,17 @@
 			projectRoot = "";
 			targets = (
 				F2A2697530863216002D0C1B /* Bytewise */,
+				B7E500000000000000000001 /* BytewiseTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		B7E500000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
 		F2A2697430863216002D0C1B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
@@ -107,6 +161,11 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		B7E500000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 		F2A2697230863216002D0C1B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
@@ -114,7 +173,53 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		B7E50000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F2A2697530863216002D0C1B /* Bytewise */;
+			targetProxy = B7E50000000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		B7E500000000000000000008 /* Debug configuration for PBXNativeTarget "BytewiseTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.saipranav.BytewiseTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bytewise.app/Contents/MacOS/Bytewise";
+			};
+			name = Debug;
+		};
+		B7E500000000000000000009 /* Release configuration for PBXNativeTarget "BytewiseTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.saipranav.BytewiseTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bytewise.app/Contents/MacOS/Bytewise";
+			};
+			name = Release;
+		};
 		F2A2697F30863217002D0C1B /* Debug configuration for PBXProject "Bytewise" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -296,6 +401,14 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		B7E500000000000000000007 /* Build configuration list for PBXNativeTarget "BytewiseTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B7E500000000000000000008 /* Debug configuration for PBXNativeTarget "BytewiseTests" */,
+				B7E500000000000000000009 /* Release configuration for PBXNativeTarget "BytewiseTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
 		F2A2697130863216002D0C1B /* Build configuration list for PBXProject "Bytewise" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
