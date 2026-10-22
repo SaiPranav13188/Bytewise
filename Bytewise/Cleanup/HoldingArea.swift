@@ -14,12 +14,32 @@ nonisolated struct CleanupCandidate: Sendable {
     let usedBy: String?
 }
 
+/// Which item is on disk at a path: its disk, its file number and whether
+/// it is a symbolic link. If any of these change after the preview, a
+/// different item is now at that path.
+nonisolated struct FileIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let isSymbolicLink: Bool
+
+    /// The item at `url` itself, without following a symbolic link.
+    init?(of url: URL) {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return nil }
+        device = UInt64(info.st_dev)
+        inode = UInt64(info.st_ino)
+        isSymbolicLink = (info.st_mode & S_IFMT) == S_IFLNK
+    }
+}
+
 /// One line of a cleanup preview: the item, and why it will be skipped if
 /// it will not be moved.
 nonisolated struct PlannedMove: Identifiable, Sendable {
     let id = UUID()
     let candidate: CleanupCandidate
     let skipReason: String?
+    /// The item the preview showed. Moving stops if it has changed.
+    var identity: FileIdentity?
 
     var willMove: Bool { skipReason == nil }
 }
@@ -46,10 +66,12 @@ nonisolated struct MoveFailure: Sendable {
 
 nonisolated enum HoldingAreaError: LocalizedError {
     case missing(String)
+    case invalidEntry(String)
 
     var errorDescription: String? {
         switch self {
         case .missing(let name): "\(name) is no longer in the holding area."
+        case .invalidEntry(let name): "The holding area's record for \(name) is damaged, so Bytewise left it alone."
         }
     }
 }
@@ -118,7 +140,8 @@ nonisolated struct HoldingArea: Sendable {
                     skip = nil
                 }
             }
-            return PlannedMove(candidate: candidate, skipReason: skip)
+            return PlannedMove(candidate: candidate, skipReason: skip,
+                               identity: skip == nil ? FileIdentity(of: candidate.url) : nil)
         }
     }
 
@@ -132,6 +155,16 @@ nonisolated struct HoldingArea: Sendable {
 
         for entry in plan where entry.willMove {
             let source = entry.candidate.url
+            // Check again right before moving: the item must be the one the
+            // preview showed, not something put at the same path since.
+            guard let identity = entry.identity, FileIdentity(of: source) == identity else {
+                failures.append(MoveFailure(url: source, message: "It changed after the preview, so it was not moved. Review it again."))
+                continue
+            }
+            guard !isInside(source.path) && source.path != directory.path else {
+                failures.append(MoveFailure(url: source, message: "It is already in the holding area."))
+                continue
+            }
             let id = UUID()
             let slot = directory.appendingPathComponent(id.uuidString, isDirectory: true)
             let destination = slot.appendingPathComponent(source.lastPathComponent)
@@ -156,6 +189,7 @@ nonisolated struct HoldingArea: Sendable {
     /// name, the item comes back as "name (restored)". Returns where it went.
     @discardableResult
     func restore(_ item: HeldItem) throws -> URL {
+        try validate(item)
         let held = URL(fileURLWithPath: item.heldPath)
         guard FileManager.default.fileExists(atPath: held.path) else {
             throw HoldingAreaError.missing(item.name)
@@ -182,11 +216,36 @@ nonisolated struct HoldingArea: Sendable {
 
     /// Deletes a held item for good. Only called after the user confirms.
     func empty(_ item: HeldItem) throws {
+        try validate(item)
         let slot = URL(fileURLWithPath: item.heldPath).deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: slot.path) {
             try FileManager.default.removeItem(at: slot)
         }
         try save(items().filter { $0.id != item.id })
+    }
+
+    /// Checks a log entry before acting on it. The log is a file on disk,
+    /// so a damaged or edited entry must not be able to point Bytewise at
+    /// files outside the holding area.
+    private func validate(_ item: HeldItem) throws {
+        let held = URL(fileURLWithPath: item.heldPath)
+        let slot = held.deletingLastPathComponent()
+        guard Self.isPlain(item.heldPath), Self.isPlain(item.originalPath),
+              slot.deletingLastPathComponent().path == directory.path,
+              slot.lastPathComponent == item.id.uuidString,
+              !held.lastPathComponent.isEmpty else {
+            throw HoldingAreaError.invalidEntry(item.name)
+        }
+    }
+
+    /// Whether `path` is somewhere below the holding area.
+    private func isInside(_ path: String) -> Bool {
+        Self.isPlain(path) && path.hasPrefix(directory.path + "/")
+    }
+
+    /// An absolute path with no "." or ".." parts, so it means what it says.
+    private static func isPlain(_ path: String) -> Bool {
+        path.hasPrefix("/") && !path.split(separator: "/").contains { $0 == ".." || $0 == "." }
     }
 
     private func save(_ log: [HeldItem]) throws {

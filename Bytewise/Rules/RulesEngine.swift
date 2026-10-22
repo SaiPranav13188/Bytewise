@@ -69,13 +69,29 @@ nonisolated struct RulesEngine: Sendable {
         // would slip past the /private rule.
         var path = url.path
         if path.count > 1 && path.hasSuffix("/") { path.removeLast() }
-        for rule in rules where matches(rule.pattern, path: path, url: url) {
-            return Assessment(verdict: rule.verdict, reason: rule.reason)
+        // A path that steps up or sideways could point anywhere, so no rule
+        // can vouch for it.
+        let parts = path.split(separator: "/")
+        if !path.hasPrefix("/") || parts.contains(where: { $0 == ".." || $0 == "." }) {
+            return Assessment(verdict: .unknown, reason: nil)
+        }
+        let folded = path.lowercased()
+        for rule in rules {
+            // Mac disks usually ignore case, so "~/documents" is the same
+            // folder as "~/Documents". Protective rules ignore case too;
+            // rules that allow cleanup match exactly, which is stricter.
+            let isProtective = rule.verdict == .keep || rule.verdict == .managedByMacOS
+            let hit = isProtective
+                ? matches(rule.pattern, path: folded, url: url, ignoringCase: true)
+                : matches(rule.pattern, path: path, url: url, ignoringCase: false)
+            if hit { return Assessment(verdict: rule.verdict, reason: rule.reason) }
         }
         return Assessment(verdict: .unknown, reason: nil)
     }
 
-    private func matches(_ pattern: Rule.Pattern, path: String, url: URL) -> Bool {
+    /// When `ignoringCase` is true, `path` must already be lowercased.
+    private func matches(_ pattern: Rule.Pattern, path: String, url: URL, ignoringCase: Bool) -> Bool {
+        let expand: (String) -> String = { ignoringCase ? self.expand($0).lowercased() : self.expand($0) }
         switch pattern {
         case .at(let base):
             return path == expand(base)
@@ -87,6 +103,7 @@ nonisolated struct RulesEngine: Sendable {
         case .pathPrefix(let prefix):
             return path.hasPrefix(expand(prefix))
         case .folderNamed(let name):
+            let name = ignoringCase ? name.lowercased() : name
             return path.split(separator: "/").contains { $0 == name }
         case .fileTypes(let base, let extensions):
             return path.hasPrefix(expand(base) + "/")
