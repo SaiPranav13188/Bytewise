@@ -30,6 +30,17 @@ These rules are in the code and covered by tests:
 4. **Open apps are protected.** Items that belong to a running app, such as Chrome's cache while Chrome is open, are skipped.
 5. **Conservative labels.** Only app caches and Xcode's DerivedData are marked *Safe to clear*. Anything less certain is marked *Review*.
 
+## Security
+
+- **Sandboxed.** Bytewise runs in the macOS app sandbox. It can only read folders you pick, and it has no network access at all, so nothing can be sent anywhere.
+- **Hardened runtime.** Release builds are signed with the hardened runtime and without debugger access, so other programs cannot inject code into Bytewise.
+- **Checked twice before anything moves.** When you confirm a cleanup, Bytewise checks each item again: its rule, open apps, and that it is the exact item the preview showed. If something else was put at that path in the meantime, such as a link to another file, it is left alone.
+- **Protected folders ignore case.** Mac disks usually treat `documents` and `Documents` as the same folder, so the rules that protect your data and macOS do too. Paths containing `.` or `..` are never trusted.
+- **A damaged holding-area log can't do harm.** Before restoring or emptying an item, Bytewise checks that its record points inside the holding area. Edited or damaged entries are refused.
+- **No third-party code.** Bytewise uses only Apple's frameworks.
+
+These rules are covered by tests in `BytewiseTests/SecurityTests.swift`.
+
 ![The cleanup preview skipping the cache of an open app](Docs/screenshots/cleanup.png)
 
 ## Requirements
@@ -51,7 +62,18 @@ To run the tests, press **⌘U** in Xcode, or run:
 xcodebuild test -project Bytewise.xcodeproj -scheme Bytewise -destination 'platform=macOS'
 ```
 
+### Making a release
+
+`Scripts/release.sh` builds a Release copy, signs it with the hardened runtime, and refuses to continue if the sandbox is missing or debugger or network access is present. It then writes `build/Bytewise-<version>.zip` and a `.sha256` checksum to publish next to it. Pass a signing identity as the first argument to sign with your own certificate.
+
 ### Opening a downloaded build
+
+Before opening a download, check it matches the published checksum:
+
+```sh
+shasum -a 256 -c Bytewise-1.0.zip.sha256
+```
+
 
 Builds published here are not notarized by Apple, so macOS warns the first time you open one. To open it anyway, right-click the app in Finder and choose **Open**. If macOS still blocks it, go to **System Settings › Privacy & Security** and click **Open Anyway**.
 
