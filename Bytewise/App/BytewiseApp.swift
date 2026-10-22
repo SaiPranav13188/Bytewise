@@ -13,6 +13,7 @@ struct BytewiseApp: App {
         WindowGroup {
             ContentView()
         }
+        .defaultSize(width: 1400, height: 880)
         Settings {
             SettingsView()
         }

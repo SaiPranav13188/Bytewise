@@ -6,141 +6,40 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var folder: URL?
-    @State private var root: FileNode?
-    @State private var current: FileNode?
-    @State private var hovered: FileNode?
-    @State private var isScanning = false
-    @State private var progress = ScanProgress()
-    @State private var showImporter = false
-    @State private var statusMessage: String?
-    @State private var errorMessage: String?
-    @State private var scanTask: Task<Void, Never>?
-    @State private var unreadable: [URL] = []
-    @AppStorage(AppSettings.hasSeenWelcomeKey) private var hasSeenWelcome = false
-    @AppStorage(AppSettings.holdingDaysKey) private var holdingDays = HoldingArea.defaultRetentionDays
-    @State private var scopeBookmark: Data?
-    @State private var selected: [ObjectIdentifier: FileNode] = [:]
+    @State private var model = ScanModel()
+    @State private var tab = Tab.explore
+    @State private var searchText = ""
     @State private var cleanupPlan: [PlannedMove]?
     @State private var showHoldingArea = false
-    /// The last move, kept so it can be undone and put back on the map.
-    @State private var lastMoved: [(held: HeldItem, node: FileNode, parent: FileNode)] = []
-    @State private var treeVersion = 0
-    @State private var mode = Mode.map
-    @State private var aiModels: [AIModel] = []
+    @FocusState private var searchFocused: Bool
+    @AppStorage(AppSettings.hasSeenWelcomeKey) private var hasSeenWelcome = false
+    @AppStorage(AppSettings.holdingDaysKey) private var holdingDays = HoldingArea.defaultRetentionDays
 
-    private enum Mode { case map, models }
-
-    private static let rules = RulesEngine()
-    private static let holdingArea = HoldingArea.standard
+    private enum Tab: String, CaseIterable {
+        case explore = "Explore"
+        case biggest = "Biggest files"
+        case cleanup = "Clean up"
+        case models = "AI models"
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button("Choose Folder") { showImporter = true }
-                    .disabled(isScanning)
-                if isScanning {
-                    Button("Cancel") { scanTask?.cancel() }
-                }
-                if let folder {
-                    Text(folder.path)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer()
-                Button("Holding Area…") { showHoldingArea = true }
-            }
-
-            if isScanning {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: Double(progress.itemsDone),
-                                 total: Double(max(progress.itemsTotal, 1)))
-                    Text("Scanning \(progress.currentItem) (\(min(progress.itemsDone + 1, progress.itemsTotal)) of \(progress.itemsTotal)) · \(progress.filesScanned.formatted()) files")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            if let statusMessage {
-                HStack {
-                    Text(statusMessage).foregroundStyle(.secondary)
-                    if !lastMoved.isEmpty {
-                        Button("Undo", action: undoLastMove)
-                    }
-                }
-            }
-
-            if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
-            }
-
-            if !unreadable.isEmpty {
-                accessNotice
-            }
-
-            if current != nil {
-                Picker("View", selection: $mode) {
-                    Text("Map").tag(Mode.map)
-                    Text("AI Models (\(aiModels.count))").tag(Mode.models)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-            }
-
-            if mode == .models {
-                AIModelsView(models: aiModels, rules: Self.rules) { node in
-                    // Open the folder that holds the model, so it shows in
-                    // the list and can be picked for cleanup.
-                    self.current = node.parent ?? node
-                    mode = .map
-                }
-            } else if let current {
-                breadcrumb(for: current)
-
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TreemapView(folder: current, version: treeVersion, hovered: $hovered) { self.current = $0 }
-                        TreemapLegend()
-                        details(hovered: hovered, in: current)
-                    }
-
-                    VStack(spacing: 8) {
-                        List(Array(current.children.prefix(20))) { item in
-                            HStack {
-                                Toggle("", isOn: selection(for: item))
-                                    .labelsHidden()
-                                    .toggleStyle(.checkbox)
-                                    .disabled(!Self.canSelect(item))
-                                Image(systemName: item.isDirectory ? "folder" : "doc")
-                                    .foregroundStyle(.secondary)
-                                Text(item.name).lineLimit(1)
-                                VerdictChip(verdict: Self.rules.assess(item.url).verdict)
-                                Spacer()
-                                Text(Self.format(item.size))
-                                    .monospacedDigit()
-                            }
-                            .help(Self.rules.assess(item.url).reason ?? "")
-                        }
-                        Button("Review \(selected.count) Selected (\(Self.format(selected.values.reduce(0) { $0 + $1.size })))…") {
-                            cleanupPlan = makePlan()
-                        }
-                        .disabled(selected.isEmpty)
-                    }
-                    .frame(width: 320)
-                }
-            } else {
-                Spacer()
-            }
+        NavigationSplitView {
+            SidebarView(model: model) { showHoldingArea = true }
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+        } detail: {
+            detail
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding()
-        .frame(minWidth: 900, minHeight: 550)
+        .toolbar(removing: .title)
+        .frame(minWidth: 1000, minHeight: 600)
+        .onChange(of: model.folder) {
+            tab = .explore
+            searchText = ""
+        }
         .sheet(isPresented: Binding(get: { !hasSeenWelcome },
                                     set: { hasSeenWelcome = !$0 })) {
             WelcomeView { hasSeenWelcome = true }
@@ -149,270 +48,300 @@ struct ContentView: View {
                                     set: { if !$0 { cleanupPlan = nil } })) {
             CleanupSheet(plan: cleanupPlan ?? [],
                          retentionDays: holdingDays,
-                         onDryRun: makePlan,
-                         onMove: performMove,
+                         onDryRun: model.makePlan,
+                         onMove: { plan in
+                             model.performMove(plan)
+                             cleanupPlan = nil
+                         },
                          onCancel: { cleanupPlan = nil })
         }
         .sheet(isPresented: $showHoldingArea) {
-            HoldingAreaView(holdingArea: Self.holdingArea,
+            HoldingAreaView(holdingArea: ScanModel.holdingArea,
                             retentionDays: holdingDays,
-                            onRestored: putBack,
-                            onClose: { showHoldingArea = false })
-        }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
-            switch result {
-            case .success(let url): startScan(url)
-            case .failure(let error): errorMessage = FriendlyError.message(for: error)
-            }
+                            onRestored: model.putBack,
+                            onClose: {
+                                showHoldingArea = false
+                                model.refreshHeldItems()
+                            })
         }
     }
 
-    // MARK: Cleanup
-
-    /// Only items a rule calls safe or worth reviewing can be picked.
-    /// Keep, macOS and unlabelled items never can.
-    private static func canSelect(_ node: FileNode) -> Bool {
-        let verdict = rules.assess(node.url).verdict
-        return verdict == .safeToClear || verdict == .review
-    }
-
-    private func selection(for node: FileNode) -> Binding<Bool> {
-        Binding(get: { selected[ObjectIdentifier(node)] != nil },
-                set: { selected[ObjectIdentifier(node)] = $0 ? node : nil })
-    }
-
-    /// Runs `body` with the scanned folder opened through its security
-    /// scope, which the sandbox needs before Bytewise can check or move
-    /// anything inside it.
-    private func withFolderAccess<T>(_ body: () -> T) -> T {
-        let accessing = folder?.startAccessingSecurityScopedResource() ?? false
-        defer { if accessing { folder?.stopAccessingSecurityScopedResource() } }
-        return body()
-    }
-
-    private func makePlan() -> [PlannedMove] {
-        let apps = RunningApp.current()
-        let candidates = selected.values.sorted { $0.size > $1.size }.map { node in
-            CleanupCandidate(url: node.url, size: node.size,
-                             assessment: Self.rules.assess(node.url),
-                             usedBy: AppUsage.app(using: Self.nameChains(for: node), among: apps))
-        }
-        return withFolderAccess { Self.holdingArea.plan(candidates) }
-    }
-
-    /// Folder names to compare with open apps: the item's path, plus its
-    /// children and grandchildren, since a "Google" cache folder holds
-    /// "Chrome".
-    private static func nameChains(for node: FileNode) -> [[String]] {
-        var chains = [node.url.pathComponents]
-        for child in node.children.prefix(50) {
-            chains.append([node.name, child.name])
-            for grandchild in child.children.prefix(20) {
-                chains.append([child.name, grandchild.name])
-            }
-        }
-        return chains
-    }
-
-    private func performMove(_ plan: [PlannedMove]) {
-        let result = withFolderAccess { Self.holdingArea.move(plan, scopeBookmark: scopeBookmark) }
-        let nodes = Dictionary(selected.values.map { ($0.url.path, $0) }, uniquingKeysWith: { first, _ in first })
-
-        var moved: [(held: HeldItem, node: FileNode, parent: FileNode)] = []
-        for held in result.moved {
-            if let node = nodes[held.originalPath], let parent = node.parent {
-                node.detach()
-                moved.append((held, node, parent))
-            }
-        }
-        if let current, !isInTree(current) { self.current = root }
-
-        lastMoved = moved
-        aiModels = root.map { AIModelFinder.find(in: $0) } ?? []
-        selected = [:]
-        cleanupPlan = nil
-        hovered = nil
-        treeVersion += 1
-        let size = result.moved.reduce(0) { $0 + $1.size }
-        statusMessage = "Moved \(result.moved.count) \(result.moved.count == 1 ? "item" : "items") (\(Self.format(size))) to the holding area."
-        errorMessage = result.failures.isEmpty ? nil
-            : "Could not move " + result.failures.map { "\($0.url.lastPathComponent): \($0.message)" }.joined(separator: " ")
-    }
-
-    private func undoLastMove() {
-        var restored: [(item: HeldItem, url: URL)] = []
-        var failures: [String] = []
-        withFolderAccess {
-            for entry in lastMoved {
-                do {
-                    restored.append((entry.held, try Self.holdingArea.restore(entry.held)))
-                } catch {
-                    failures.append("\(entry.held.name): \(FriendlyError.message(for: error))")
-                }
-            }
-        }
-        putBack(restored)
-        statusMessage = "Restored \(restored.count) \(restored.count == 1 ? "item" : "items")."
-        errorMessage = failures.isEmpty ? nil : "Could not restore " + failures.joined(separator: "; ")
-    }
-
-    /// Puts restored items back on the map when they came from the last move
-    /// and went back to their original place.
-    private func putBack(_ restored: [(item: HeldItem, url: URL)]) {
-        for (item, url) in restored {
-            guard let index = lastMoved.firstIndex(where: { $0.held.id == item.id }) else { continue }
-            let entry = lastMoved.remove(at: index)
-            if url.path == item.originalPath && isInTree(entry.parent) {
-                entry.node.attach(to: entry.parent)
-            }
-        }
-        aiModels = root.map { AIModelFinder.find(in: $0) } ?? []
-        treeVersion += 1
-    }
-
-    private func isInTree(_ node: FileNode) -> Bool {
-        var top = node
-        while let parent = top.parent { top = parent }
-        return top === root
-    }
-
-    /// Shown when macOS blocked some folders, so their sizes are missing.
-    private var accessNotice: some View {
-        HStack {
-            Image(systemName: "lock")
-            Text("macOS blocked \(unreadable.count.formatted()) \(unreadable.count == 1 ? "folder" : "folders"), so some sizes may be low. Full Disk Access lets Bytewise include them.")
-                .help(unreadable.prefix(10).map(\.path).joined(separator: "\n"))
-            Spacer()
-            Button("Open Full Disk Access Settings") { FullDiskAccess.openSettings() }
-        }
-        .font(.callout)
-        .padding(8)
-        .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    /// The path from the scanned folder down to the open one. Click a part to
-    /// go back up to it.
-    private func breadcrumb(for node: FileNode) -> some View {
-        var chain: [FileNode] = []
-        var next: FileNode? = node
-        while let step = next {
-            chain.insert(step, at: 0)
-            next = step.parent
-        }
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(chain) { step in
-                    if step !== chain.first {
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+    @ViewBuilder
+    private var detail: some View {
+        if model.isScanning {
+            ScanningView(model: model)
+        } else if let current = model.current, let root = model.root {
+            VStack(alignment: .leading, spacing: 14) {
+                header(current)
+                tabBar
+                banners
+                Group {
+                    if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        SearchResultsView(model: model, folder: current, text: searchText)
+                    } else {
+                        switch tab {
+                        case .explore: ExploreView(model: model, folder: current)
+                        case .biggest: BiggestFilesView(model: model, folder: current)
+                        case .cleanup: CleanupListView(model: model, root: root)
+                        case .models:
+                            AIModelsView(models: model.aiModels, rules: ScanModel.rules) { node in
+                                // Open the folder that holds the model, so it
+                                // shows in the list and can be picked for cleanup.
+                                model.current = node.parent ?? node
+                                tab = .explore
+                            }
+                            .card(padding: 18)
+                        }
                     }
-                    Button(step.name) { current = step }
-                        .buttonStyle(.link)
-                        .disabled(step === node)
                 }
+                .frame(maxHeight: .infinity)
+                if !model.selected.isEmpty {
+                    selectionBar
+                }
+            }
+        } else {
+            EmptyStateView(model: model)
+        }
+    }
+
+    // MARK: Header
+
+    private func header(_ current: FileNode) -> some View {
+        HStack(spacing: 12) {
+            Button(action: model.goUp) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(.quaternary.opacity(0.7), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(current.parent == nil)
+            .keyboardShortcut(.upArrow, modifiers: .command)
+            .help("Go up one folder (⌘↑)")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(current.name)
+                    .font(.system(size: 20, weight: .bold))
+                    .lineLimit(1)
+                breadcrumb
+            }
+
+            Spacer(minLength: 20)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search, e.g. ext:dmg size:>500mb", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onExitCommand { searchText = "" }
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("⌘F").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(width: 300)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .background(Button("") { searchFocused = true }.keyboardShortcut("f").hidden())
+
+            Button(action: model.rescan) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(.quaternary.opacity(0.7), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("r")
+            .help("Scan again (⌘R)")
+        }
+    }
+
+    /// The path from the scanned folder down to the open one. Click a part
+    /// to go back up to it.
+    private var breadcrumb: some View {
+        let chain = model.path
+        return HStack(spacing: 3) {
+            ForEach(chain) { step in
+                if step !== chain.first {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                Button(step === chain.first ? step.url.path : step.name) { model.current = step }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(step === chain.last ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+        }
+        .font(.caption)
+        .truncationMode(.head)
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 6) {
+            ForEach(Tab.allCases, id: \.self) { item in
+                let isOn = tab == item && searchText.isEmpty
+                Button {
+                    tab = item
+                    searchText = ""
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(item.rawValue)
+                        if item == .models && !model.aiModels.isEmpty {
+                            Text("\(model.aiModels.count)")
+                                .font(.caption.weight(.bold))
+                                .padding(.horizontal, 5)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(isOn ? Color.white : .primary)
+                    .background(isOn ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(.quaternary.opacity(0.6)),
+                                in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
             }
         }
     }
 
-    /// Two lines under the map: what the item is and how big, then its
-    /// verdict and reason. Only the path is shortened when space runs out.
-    private func details(hovered: FileNode?, in folder: FileNode) -> some View {
-        let item = hovered ?? folder
-        let name: String
-        let numbers: String
-        if let hovered {
-            name = hovered.url.path.replacingOccurrences(of: folder.url.path + "/", with: "")
-            let share = folder.size > 0 ? Double(hovered.size) / Double(folder.size) : 0
-            numbers = "· \(Self.format(hovered.size)) · \(share.formatted(.percent.precision(.fractionLength(1)))) of \(folder.name)"
-        } else {
-            name = folder.name
-            numbers = "· \(Self.format(folder.size)) · \(folder.children.count.formatted()) items"
-        }
-        let assessment = Self.rules.assess(item.url)
+    // MARK: Messages
 
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Text(name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(numbers)
-                    .fixedSize()
+    @ViewBuilder
+    private var banners: some View {
+        if let message = model.statusMessage {
+            HStack {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(message)
+                Spacer()
+                if !model.lastMoved.isEmpty {
+                    Button("Undo", action: model.undoLastMove)
+                }
+                Button { model.statusMessage = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
             }
-            HStack(spacing: 6) {
-                VerdictChip(verdict: assessment.verdict)
-                // A blank line when there is no reason, so the map does not jump.
-                Text(assessment.reason ?? " ")
+            .font(.callout)
+            .card(padding: 10)
+        }
+        if let message = model.errorMessage {
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text(message)
+                Spacer()
+                Button { model.errorMessage = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+            .card(padding: 10)
+        }
+    }
+
+    /// Shown while anything is picked for cleanup, on every tab.
+    private var selectionBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checklist")
+                .foregroundStyle(Color.accentColor)
+            Text("\(model.selected.count) \(model.selected.count == 1 ? "item" : "items") picked")
+                .fontWeight(.semibold)
+            SizeText(bytes: model.selectedSize)
+            Spacer()
+            Button("Clear", action: model.clearSelection)
+            Button("Review and Clean Up…") { cleanupPlan = model.makePlan() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: .command)
+        }
+        .card(padding: 12)
+    }
+}
+
+/// Progress while a scan runs.
+private struct ScanningView: View {
+    let model: ScanModel
+
+    var body: some View {
+        let progress = model.progress
+        VStack(spacing: 18) {
+            ProgressView(value: Double(progress.itemsDone), total: Double(max(progress.itemsTotal, 1)))
+                .progressViewStyle(.circular)
+                .controlSize(.large)
+            VStack(spacing: 6) {
+                Text("Reading \(model.folder?.lastPathComponent.isEmpty == false ? model.folder!.lastPathComponent : "your disk")…")
+                    .font(.title2.weight(.semibold))
+                Text(progress.currentItem.isEmpty ? " " : progress.currentItem)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(.middle)
+                Text("\(progress.filesScanned.formatted()) files · \(min(progress.itemsDone + 1, max(progress.itemsTotal, 1))) of \(progress.itemsTotal) top-level items")
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Button("Cancel", action: model.cancelScan)
+                .keyboardShortcut(.cancelAction)
+        }
+        .frame(width: 420)
+        .padding(32)
+        .card()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Shown before the first scan.
+private struct EmptyStateView: View {
+    let model: ScanModel
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Image(systemName: "square.split.2x2.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(Color.accentColor.gradient)
+            VStack(spacing: 8) {
+                Text("See where your space went")
+                    .font(.largeTitle.weight(.bold))
+                Text("Pick a place in the sidebar, or start with your Home folder. Bytewise reads names and sizes only, and nothing leaves your Mac.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            }
+            if let disk = DiskSpace.current() {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(disk.name).fontWeight(.semibold)
+                        Spacer()
+                        Text("\(Format.bytes(disk.used)) used · \(Format.bytes(disk.available)) free")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                    ShareBar(fraction: Double(disk.used) / Double(max(disk.total, 1)), tint: .orange)
+                        .frame(height: 8)
+                }
+                .frame(width: 420)
+                .card()
+            }
+            HStack(spacing: 10) {
+                Button("Scan Home") { model.scan(.home) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
+                Button("Scan Whole Disk") { model.scan(.disk) }
+                    .controlSize(.large)
+                Button("Choose Folder…", action: model.chooseFolder)
+                    .controlSize(.large)
+            }
+            if let message = model.errorMessage ?? model.statusMessage {
+                Text(message).foregroundStyle(.secondary)
             }
         }
-        .font(.callout)
-    }
-
-    private static func format(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-
-    private func startScan(_ url: URL) {
-        scanTask?.cancel()
-        folder = url
-        root = nil
-        current = nil
-        hovered = nil
-        unreadable = []
-        selected = [:]
-        lastMoved = []
-        scopeBookmark = nil
-        aiModels = []
-        mode = .map
-        progress = ScanProgress()
-        statusMessage = nil
-        errorMessage = nil
-        isScanning = true
-
-        scanTask = Task {
-            // The app is sandboxed, so the picked folder must be opened
-            // through its security scope before reading it.
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            // Saved with each moved item so it can be restored after a relaunch.
-            scopeBookmark = try? url.bookmarkData(options: .withSecurityScope,
-                                                  includingResourceValuesForKeys: nil, relativeTo: nil)
-
-            // Progress arrives from the background scan; keep only the
-            // latest report so the interface never falls behind.
-            let (updates, continuation) = AsyncStream.makeStream(
-                of: ScanProgress.self, bufferingPolicy: .bufferingNewest(1))
-            let progressTask = Task {
-                for await update in updates { progress = update }
-            }
-            defer { progressTask.cancel() }
-
-            let start = Date()
-            do {
-                let result = try await FolderScanner.scan(url, excluding: AppSettings.excludedFolders) {
-                    continuation.yield($0)
-                }
-                continuation.finish()
-                await progressTask.value
-                root = result.root
-                current = result.root
-                unreadable = result.unreadable
-                aiModels = AIModelFinder.find(in: result.root)
-                if result.root.children.isEmpty && result.unreadable.contains(where: { $0.path == url.path }) {
-                    errorMessage = "Bytewise could not open this folder. macOS may be protecting it. Turn on Full Disk Access for Bytewise, then scan again."
-                }
-                let seconds = Date().timeIntervalSince(start)
-                statusMessage = "Scanned \(progress.filesScanned.formatted()) files in \(seconds.formatted(.number.precision(.fractionLength(1)))) s"
-            } catch is CancellationError {
-                statusMessage = "Scan cancelled."
-            } catch {
-                errorMessage = FriendlyError.message(for: error)
-            }
-            isScanning = false
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

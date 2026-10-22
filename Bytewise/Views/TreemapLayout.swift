@@ -9,33 +9,65 @@ import SwiftUI
 struct TreemapTile {
     let node: FileNode
     let rect: CGRect
+    /// 1 for items directly in the open folder.
+    let depth: Int
 }
 
-/// Lays out a folder as a nested, squarified treemap and prepares it for
-/// drawing. Rectangles of the same colour are merged into one path, so the
-/// map draws in a handful of fills however many items it shows.
+/// Lays out a folder as a squarified treemap. Items directly in the folder
+/// become rounded, coloured tiles with their name and size; what is inside
+/// them is outlined faintly, so big folders show their shape.
 final class TreemapLayout {
     /// Tiles in drawing order: every folder comes before its contents.
     private(set) var tiles: [TreemapTile] = []
-    /// Folder backgrounds, one path per nesting depth, shallowest first.
-    private(set) var folderPaths: [Path] = []
-    private(set) var filePaths: [FileKind: Path] = [:]
-    private(set) var labels: [(rect: CGRect, name: String)] = []
+    private(set) var topTiles: [TreemapTile] = []
+    /// Outlines of items inside the top tiles, one path per nesting depth.
+    private(set) var innerPaths: [Path] = []
+    private(set) var labels: [(rect: CGRect, node: FileNode, depth: Int)] = []
 
+    static let cornerRadius: CGFloat = 8
+    private static let gap: CGFloat = 3
     /// Items smaller than this on either side are not drawn.
     private static let minSide: CGFloat = 2
-    private static let maxDepth = 8
-    /// Only the outer levels get names, to keep the map readable.
-    private static let labelDepth = 2
-    private static let headerHeight: CGFloat = 14
+    private static let maxDepth = 6
+    private static let outlineDepth = 2
+    private static let headerHeight: CGFloat = 38
+    private static let subHeaderHeight: CGFloat = 16
 
     init(folder: FileNode, size: CGSize) {
-        layOut(folder.children, in: CGRect(origin: .zero, size: size), depth: 1)
+        let box = CGRect(origin: .zero, size: size)
+        let visible = Array(folder.children.prefix { $0.size > 0 })
+        let rects = Self.squarify(visible.map { Double($0.size) }, in: box)
+        for (node, r) in zip(visible, rects) {
+            let r = r.insetBy(dx: Self.gap / 2, dy: Self.gap / 2)
+            guard r.width >= Self.minSide, r.height >= Self.minSide else { continue }
+            let tile = TreemapTile(node: node, rect: r, depth: 1)
+            tiles.append(tile)
+            topTiles.append(tile)
+
+            var inner = r.insetBy(dx: 5, dy: 5)
+            if r.width >= 56 && r.height >= 34 {
+                labels.append((r, node, 1))
+                if r.height >= Self.headerHeight + 30 {
+                    inner.origin.y += Self.headerHeight - 4
+                    inner.size.height -= Self.headerHeight - 4
+                } else {
+                    continue
+                }
+            }
+            if node.isDirectory, inner.width >= 8, inner.height >= 8 {
+                layOut(node.children, in: inner, depth: 2)
+            }
+        }
     }
 
     /// The deepest tile under `point`.
     func tile(at point: CGPoint) -> TreemapTile? {
         tiles.last { $0.rect.contains(point) }
+    }
+
+    /// The tile directly in the open folder under `point`.
+    func topTile(at point: CGPoint) -> TreemapTile? {
+        topTiles.first { $0.rect.contains(point) }
     }
 
     private func layOut(_ nodes: [FileNode], in rect: CGRect, depth: Int) {
@@ -45,29 +77,21 @@ final class TreemapLayout {
 
         for (node, r) in zip(visible, rects) {
             guard r.width >= Self.minSide, r.height >= Self.minSide else { continue }
-            tiles.append(TreemapTile(node: node, rect: r))
-            let canLabel = depth <= Self.labelDepth && r.width >= 60
-
-            if node.isDirectory {
-                if folderPaths.count < depth { folderPaths.append(Path()) }
-                folderPaths[depth - 1].addRect(r.insetBy(dx: 0.5, dy: 0.5))
-
-                var inner = r.insetBy(dx: 2, dy: 2)
-                if canLabel && r.height >= 40 {
-                    labels.append((CGRect(x: inner.minX, y: inner.minY,
-                                          width: inner.width, height: Self.headerHeight), node.name))
-                    inner.origin.y += Self.headerHeight
-                    inner.size.height -= Self.headerHeight
-                }
-                if depth < Self.maxDepth, inner.width >= 4, inner.height >= 4 {
-                    layOut(node.children, in: inner, depth: depth + 1)
-                }
-            } else {
-                filePaths[node.kind, default: Path()].addRect(r.insetBy(dx: 0.5, dy: 0.5))
-                if canLabel && r.height >= 18 {
-                    labels.append((CGRect(x: r.minX, y: r.minY + 1,
-                                          width: r.width, height: Self.headerHeight), node.name))
-                }
+            tiles.append(TreemapTile(node: node, rect: r, depth: depth))
+            if depth <= Self.outlineDepth {
+                while innerPaths.count < depth - 1 { innerPaths.append(Path()) }
+                innerPaths[depth - 2].addRoundedRect(in: r.insetBy(dx: 1, dy: 1),
+                                                     cornerSize: CGSize(width: 3, height: 3))
+            }
+            var inner = r.insetBy(dx: 2, dy: 2)
+            if depth == 2 && r.width >= 90 && r.height >= 36 {
+                labels.append((r, node, depth))
+                // Keep the label's strip clear, so nothing inside covers it.
+                inner.origin.y += Self.subHeaderHeight
+                inner.size.height -= Self.subHeaderHeight
+            }
+            if node.isDirectory, depth < Self.maxDepth, inner.width >= 6, inner.height >= 6 {
+                layOut(node.children, in: inner, depth: depth + 1)
             }
         }
     }
